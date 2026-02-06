@@ -394,9 +394,10 @@ int botSendImage(int64_t target, char *filename) {
     return retval;
 }
 
-/* Send an image with an inline keyboard button. Returns message_id via msg_id
- * if not NULL. Return 1 on success, 0 on error. */
-int botSendImageWithKeyboard(int64_t target, char *filename, const char *btn_text, const char *btn_data, int64_t *msg_id) {
+/* Send an image with an inline keyboard. reply_markup is the full JSON
+ * for the inline keyboard (or NULL for no keyboard). Returns message_id
+ * via msg_id if not NULL. Return 1 on success, 0 on error. */
+int botSendImageWithKeyboard(int64_t target, char *filename, const char *reply_markup, int64_t *msg_id) {
     CURL *curl;
     CURLcode res;
     int retval = 0;
@@ -416,15 +417,13 @@ int botSendImageWithKeyboard(int64_t target, char *filename, const char *btn_tex
                  CURLFORM_FILE, filename,
                  CURLFORM_END);
 
-    /* Build inline keyboard JSON. */
-    sds keyboard = sdscatprintf(sdsempty(),
-        "{\"inline_keyboard\":[[{\"text\":\"%s\",\"callback_data\":\"%s\"}]]}",
-        btn_text, btn_data);
-    curl_formadd(&formpost, &lastptr,
-                 CURLFORM_COPYNAME, "reply_markup",
-                 CURLFORM_COPYCONTENTS, keyboard,
-                 CURLFORM_END);
-    sdsfree(keyboard);
+    /* Inline keyboard. */
+    if (reply_markup) {
+        curl_formadd(&formpost, &lastptr,
+                     CURLFORM_COPYNAME, "reply_markup",
+                     CURLFORM_COPYCONTENTS, reply_markup,
+                     CURLFORM_END);
+    }
 
     curl = curl_easy_init();
     if (curl) {
@@ -470,7 +469,7 @@ int botSendImageWithKeyboard(int64_t target, char *filename, const char *btn_tex
 }
 
 /* Edit a message to replace its media with a new image. */
-int botEditMessageMedia(int64_t chat_id, int64_t message_id, char *filename, const char *btn_text, const char *btn_data) {
+int botEditMessageMedia(int64_t chat_id, int64_t message_id, char *filename, const char *reply_markup) {
     CURL *curl;
     CURLcode res;
     int retval = 0;
@@ -504,15 +503,11 @@ int botEditMessageMedia(int64_t chat_id, int64_t message_id, char *filename, con
                  CURLFORM_END);
 
     /* Inline keyboard. */
-    if (btn_text && btn_data) {
-        sds keyboard = sdscatprintf(sdsempty(),
-            "{\"inline_keyboard\":[[{\"text\":\"%s\",\"callback_data\":\"%s\"}]]}",
-            btn_text, btn_data);
+    if (reply_markup) {
         curl_formadd(&formpost, &lastptr,
                      CURLFORM_COPYNAME, "reply_markup",
-                     CURLFORM_COPYCONTENTS, keyboard,
+                     CURLFORM_COPYCONTENTS, reply_markup,
                      CURLFORM_END);
-        sdsfree(keyboard);
     }
 
     curl = curl_easy_init();

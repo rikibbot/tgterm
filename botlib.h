@@ -84,8 +84,8 @@ int botSendMessageAndGetInfo(int64_t target, sds text, int64_t reply_to, int64_t
 int botSendMessage(int64_t target, sds text, int64_t reply_to);
 int botEditMessageText(int64_t chat_id, int message_id, sds text);
 int botSendImage(int64_t target, char *filename);
-int botSendImageWithKeyboard(int64_t target, char *filename, const char *btn_text, const char *btn_data, int64_t *msg_id);
-int botEditMessageMedia(int64_t chat_id, int64_t message_id, char *filename, const char *btn_text, const char *btn_data);
+int botSendImageWithKeyboard(int64_t target, char *filename, const char *reply_markup, int64_t *msg_id);
+int botEditMessageMedia(int64_t chat_id, int64_t message_id, char *filename, const char *reply_markup);
 int botAnswerCallbackQuery(const char *callback_id);
 int botGetFile(BotRequest *br, const char *target_filename);
 char *botGetUsername(void);

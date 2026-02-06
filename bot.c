@@ -521,17 +521,65 @@ sds build_help_message(void) {
 
 #define SCREENSHOT_PATH "/tmp/tgterm_screenshot.png"
 #define OWNER_KEY "owner_id"
-#define REFRESH_BTN "\xf0\x9f\x94\x84 Refresh"
 #define REFRESH_DATA "refresh"
+
+/* Build inline keyboard JSON with window switcher buttons + refresh.
+ * Buttons: [.1] [.2] ... [🔄]  — current window is marked as >.N<.
+ * Caller must sdsfree() the result. */
+sds build_keyboard(void) {
+    refresh_window_list();
+
+    sds kb = sdsnew("{\"inline_keyboard\":[[");
+    for (int i = 0; i < WindowCount; i++) {
+        int is_current = Connected &&
+                         WindowList[i].window_id == ConnectedWid;
+        char label[32], data[16];
+        if (is_current)
+            snprintf(label, sizeof(label), ">.%d<", i + 1);
+        else
+            snprintf(label, sizeof(label), ".%d", i + 1);
+        snprintf(data, sizeof(data), "win:%d", i + 1);
+        if (i > 0) kb = sdscat(kb, ",");
+        kb = sdscatprintf(kb,
+            "{\"text\":\"%s\",\"callback_data\":\"%s\"}", label, data);
+    }
+    if (WindowCount > 0) kb = sdscat(kb, ",");
+    kb = sdscat(kb,
+        "{\"text\":\"\xf0\x9f\x94\x84\",\"callback_data\":\"refresh\"}");
+    kb = sdscat(kb, "]]}");
+    return kb;
+}
 
 void send_screenshot(int64_t chat_id) {
     if (capture_connected_window(SCREENSHOT_PATH) != 0) return;
-    botSendImageWithKeyboard(chat_id, SCREENSHOT_PATH, REFRESH_BTN, REFRESH_DATA, NULL);
+    sds kb = build_keyboard();
+    botSendImageWithKeyboard(chat_id, SCREENSHOT_PATH, kb, NULL);
+    sdsfree(kb);
 }
 
 void refresh_screenshot(int64_t chat_id, int64_t msg_id) {
     if (capture_connected_window(SCREENSHOT_PATH) != 0) return;
-    botEditMessageMedia(chat_id, msg_id, SCREENSHOT_PATH, REFRESH_BTN, REFRESH_DATA);
+    sds kb = build_keyboard();
+    botEditMessageMedia(chat_id, msg_id, SCREENSHOT_PATH, kb);
+    sdsfree(kb);
+}
+
+/* Switch connection to window N (1-based). Returns 1 on success. */
+int switch_to_window(int n) {
+    refresh_window_list();
+    if (n < 1 || n > WindowCount) return 0;
+
+    WinInfo *w = &WindowList[n - 1];
+    Connected = 1;
+    ConnectedWid = w->window_id;
+    ConnectedPid = w->pid;
+    strncpy(ConnectedOwner, w->owner, sizeof(ConnectedOwner) - 1);
+    ConnectedOwner[sizeof(ConnectedOwner) - 1] = '\0';
+    strncpy(ConnectedTitle, w->title, sizeof(ConnectedTitle) - 1);
+    ConnectedTitle[sizeof(ConnectedTitle) - 1] = '\0';
+
+    plat_raise_window(w->pid, w->window_id);
+    return 1;
 }
 
 void handle_request(sqlite3 *db, BotRequest *br) {
@@ -591,6 +639,9 @@ void handle_request(sqlite3 *db, BotRequest *br) {
         botAnswerCallbackQuery(br->callback_id);
         if (strcmp(br->callback_data, REFRESH_DATA) == 0 && Connected) {
             refresh_screenshot(br->target, br->msg_id);
+        } else if (strncmp(br->callback_data, "win:", 4) == 0) {
+            if (switch_to_window(atoi(br->callback_data + 4)))
+                refresh_screenshot(br->target, br->msg_id);
         }
         goto done;
     }
@@ -631,33 +682,19 @@ void handle_request(sqlite3 *db, BotRequest *br) {
     /* Handle .N to connect to window N. */
     if (req[0] == '.' && isdigit(req[1])) {
         int n = atoi(req + 1);
-        refresh_window_list();
-
-        if (n < 1 || n > WindowCount) {
+        if (!switch_to_window(n)) {
             botSendMessage(br->target, "Invalid window number.", 0);
-            goto done;
+        } else {
+            sds msg = sdsnew("Connected to ");
+            msg = sdscat(msg, ConnectedOwner);
+            if (ConnectedTitle[0]) {
+                msg = sdscat(msg, " - ");
+                msg = sdscat(msg, ConnectedTitle);
+            }
+            botSendMessage(br->target, msg, 0);
+            sdsfree(msg);
+            send_screenshot(br->target);
         }
-
-        WinInfo *w = &WindowList[n - 1];
-        Connected = 1;
-        ConnectedWid = w->window_id;
-        ConnectedPid = w->pid;
-        strncpy(ConnectedOwner, w->owner, sizeof(ConnectedOwner) - 1);
-        ConnectedOwner[sizeof(ConnectedOwner) - 1] = '\0';
-        strncpy(ConnectedTitle, w->title, sizeof(ConnectedTitle) - 1);
-        ConnectedTitle[sizeof(ConnectedTitle) - 1] = '\0';
-
-        sds msg = sdsnew("Connected to ");
-        msg = sdscat(msg, ConnectedOwner);
-        if (ConnectedTitle[0]) {
-            msg = sdscat(msg, " - ");
-            msg = sdscat(msg, ConnectedTitle);
-        }
-        botSendMessage(br->target, msg, 0);
-        sdsfree(msg);
-
-        plat_raise_window(w->pid, w->window_id);
-        send_screenshot(br->target);
         goto done;
     }
 

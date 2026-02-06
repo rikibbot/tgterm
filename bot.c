@@ -6,6 +6,7 @@
  * Commands:
  *   .list    - List available terminal windows
  *   .1 .2 .. - Connect to window by number
+ *   .text    - Send screen content as text (requires tmux)
  *   .help    - Show help
  *
  * Once connected, any text is sent as keystrokes (newline auto-added).
@@ -489,11 +490,47 @@ sds build_list_message(void) {
     return msg;
 }
 
+/* Read visible screen text from the connected terminal via tmux.
+ * Returns the text as an sds string, or NULL if tmux is not available
+ * or the connected terminal is not running inside a tmux session. */
+sds read_screen_text(void) {
+    if (!Connected) return NULL;
+
+    /* Find tmux client PID among children of the connected window. */
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd),
+        "CPID=$(pgrep -P %d tmux 2>/dev/null) && "
+        "TARGET=$(tmux list-clients -F '#{client_pid} #{session_name}' "
+        "2>/dev/null | awk -v p=\"$CPID\" '$1==p{print $2}') && "
+        "[ -n \"$TARGET\" ] && tmux capture-pane -p -t \"$TARGET\"",
+        (int)ConnectedPid);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return NULL;
+
+    sds text = sdsempty();
+    char buf[4096];
+    while (fgets(buf, sizeof(buf), fp))
+        text = sdscat(text, buf);
+    int status = pclose(fp);
+
+    if (status != 0 || sdslen(text) == 0) {
+        sdsfree(text);
+        return NULL;
+    }
+
+    /* Trim trailing blank lines. */
+    while (sdslen(text) > 0 && text[sdslen(text) - 1] == '\n')
+        sdsrange(text, 0, -2);
+    return text;
+}
+
 sds build_help_message(void) {
     return sdsnew(
         "Commands:\n"
         ".list - Show terminal windows\n"
         ".1 .2 ... - Connect to window\n"
+        ".text - Send screen as text (requires tmux)\n"
         ".help - This help\n\n"
         "Once connected, text is sent as keystrokes.\n"
         "Newline is auto-added; end with `\xf0\x9f\x92\x9c` to suppress it.\n\n"
@@ -660,6 +697,29 @@ void handle_request(sqlite3 *db, BotRequest *br) {
         sds msg = build_help_message();
         botSendMessage(br->target, msg, 0);
         sdsfree(msg);
+        goto done;
+    }
+
+    if (strcasecmp(req, ".text") == 0) {
+        if (!Connected) {
+            botSendMessage(br->target, "Not connected to a window.", 0);
+        } else {
+            sds text = read_screen_text();
+            if (text) {
+                /* Wrap in code block to prevent Markdown formatting
+                 * and display in monospace font. */
+                sds msg = sdsnew("```\n");
+                msg = sdscatsds(msg, text);
+                msg = sdscat(msg, "\n```");
+                botSendMessage(br->target, msg, 0);
+                sdsfree(msg);
+                sdsfree(text);
+            } else {
+                botSendMessage(br->target,
+                    "Could not read screen text. "
+                    "This command requires tmux.", 0);
+            }
+        }
         goto done;
     }
 
